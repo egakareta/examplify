@@ -57,9 +57,20 @@ pub fn entries() -> Vec<LogEntry> {
     lock_buffer().entries.iter().cloned().collect()
 }
 
+#[cfg(target_arch = "wasm32")]
+fn captured_entries() -> Vec<(u64, LogEntry)> {
+    let buffer = lock_buffer();
+    buffer
+        .ids
+        .iter()
+        .copied()
+        .zip(buffer.entries.iter().cloned())
+        .collect()
+}
+
 /// Remove all currently captured records and clear the browser console.
 pub fn clear() {
-    lock_buffer().entries.clear();
+    lock_buffer().clear();
     #[cfg(target_arch = "wasm32")]
     platform::refresh();
 }
@@ -67,6 +78,10 @@ pub fn clear() {
 #[derive(Default)]
 struct LogBuffer {
     entries: VecDeque<LogEntry>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    ids: VecDeque<u64>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    next_id: u64,
 }
 
 impl LogBuffer {
@@ -74,8 +89,17 @@ impl LogBuffer {
     fn push(&mut self, entry: LogEntry) {
         if self.entries.len() == MAX_LOG_ENTRIES {
             self.entries.pop_front();
+            self.ids.pop_front();
         }
+        self.ids.push_back(self.next_id);
+        self.next_id = self.next_id.wrapping_add(1);
         self.entries.push_back(entry);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.ids.clear();
     }
 }
 
@@ -89,19 +113,24 @@ fn lock_buffer() -> MutexGuard<'static, LogBuffer> {
 #[cfg(target_arch = "wasm32")]
 mod platform {
     use std::{
+        collections::HashSet,
         sync::{Mutex, MutexGuard, OnceLock},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use log::{Level, LevelFilter, Log, Metadata, Record};
     use wasm_bindgen::{JsCast, closure::Closure};
-    use web_sys::{Document, Element, Event, HtmlElement, HtmlInputElement};
+    use web_sys::{
+        Clipboard, ClipboardEvent, Document, Element, Event, HtmlElement, HtmlInputElement,
+        KeyboardEvent, MouseEvent,
+    };
 
-    use super::{LogEntry, clear, entries, lock_buffer};
+    use super::{LogEntry, captured_entries, clear, lock_buffer};
 
     const PANEL_ID: &str = "examplify-console";
     const REOPEN_ID: &str = "examplify-console-reopen";
     const FILTERS_ID: &str = "examplify-console-filters";
+    const SEARCH_ID: &str = "examplify-console-search";
     const ENTRIES_ID: &str = "examplify-console-entries";
     const STATUS_ID: &str = "examplify-console-status";
     const PANEL_STYLE: &str = "position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;width:100vw;height:100vh;height:100dvh;max-height:none;display:flex;flex-direction:column;gap:12px;margin:0;padding:clamp(10px,2vw,24px);border:0;border-radius:0;background:#101014;color:#eeeeee;box-shadow:none;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;";
@@ -150,6 +179,10 @@ mod platform {
     struct ConsoleOptions {
         auto_scroll: bool,
         minimized: bool,
+        search_query: String,
+        selected_ids: HashSet<u64>,
+        selection_anchor: Option<u64>,
+        visible_ids: Vec<u64>,
         show_trace: bool,
         show_debug: bool,
         show_info: bool,
@@ -162,6 +195,10 @@ mod platform {
             Self {
                 auto_scroll: true,
                 minimized: false,
+                search_query: String::new(),
+                selected_ids: HashSet::new(),
+                selection_anchor: None,
+                visible_ids: Vec::new(),
                 show_trace: true,
                 show_debug: true,
                 show_info: true,
@@ -211,8 +248,18 @@ mod platform {
             return;
         };
 
-        let snapshot = entries();
-        let options = lock_options().clone();
+        let snapshot = captured_entries();
+        let mut options = lock_options().clone();
+        let valid_ids: HashSet<_> = snapshot.iter().map(|(id, _)| *id).collect();
+        options.selected_ids.retain(|id| valid_ids.contains(id));
+        if options
+            .selection_anchor
+            .is_some_and(|id| !valid_ids.contains(&id))
+        {
+            options.selection_anchor = None;
+        }
+        lock_options().selected_ids = options.selected_ids.clone();
+        lock_options().selection_anchor = options.selection_anchor;
         update_filter_controls(&document, &options);
         update_visibility(&document, options.minimized);
 
@@ -223,27 +270,38 @@ mod platform {
 
         let visible: Vec<_> = snapshot
             .iter()
-            .filter(|entry| options.includes(entry.level))
+            .filter(|(_, entry)| {
+                options.includes(entry.level) && matches_search(entry, &options.search_query)
+            })
+            .map(|(id, entry)| (*id, entry))
             .collect();
+        let visible_ids: Vec<_> = visible.iter().map(|(id, _)| *id).collect();
+        lock_options().visible_ids = visible_ids.clone();
 
-        if let Some(status) = document.get_element_by_id(STATUS_ID) {
-            status.set_text_content(Some(&format!(
-                "{} shown, {} total",
-                visible.len(),
-                snapshot.len()
-            )));
-        }
+        update_status(
+            &document,
+            visible.len(),
+            snapshot.len(),
+            options.selected_ids.len(),
+        );
 
         if visible.is_empty() {
             if let Ok(empty) = document.create_element("div") {
-                empty.set_text_content(Some("No matching log messages yet."));
+                let message = if snapshot.is_empty() {
+                    "No log messages yet."
+                } else {
+                    "No matching log messages."
+                };
+                empty.set_text_content(Some(message));
                 let _ =
                     empty.set_attribute("style", "padding:12px 0;color:#909098;font-style:italic");
                 let _ = list.append_child(&empty);
             }
         } else {
-            for entry in visible {
-                if let Some(row) = make_log_row(&document, entry) {
+            for (id, entry) in visible {
+                if let Some(row) =
+                    make_log_row(&document, id, entry, options.selected_ids.contains(&id))
+                {
                     let _ = list.append_child(&row);
                 }
             }
@@ -292,11 +350,32 @@ mod platform {
             "display:flex;align-items:center;flex-wrap:wrap;gap:8px;",
         );
 
+        let search = document.create_element("input").ok()?;
+        search.set_id(SEARCH_ID);
+        let _ = search.set_attribute("type", "search");
+        let _ = search.set_attribute("placeholder", "Search logs…");
+        let _ = search.set_attribute("aria-label", "Search log messages");
+        set_style(
+            &search,
+            "box-sizing:border-box;flex:1 1 220px;width:auto;min-width:180px;height:28px;padding:3px 7px;border:1px solid #ffffff38;border-radius:4px;background:#ffffff0d;color:#eeeeee;font:inherit;line-height:1.5;",
+        );
+        let search_listener = Closure::<dyn FnMut(Event)>::new(|event: Event| {
+            if let Some(query) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+                .map(|input| input.value())
+            {
+                lock_options().search_query = query;
+                refresh();
+            }
+        });
+        add_listener(&search, "input", search_listener);
+
         let filters = document.create_element("div").ok()?;
         filters.set_id(FILTERS_ID);
         set_style(
             &filters,
-            "display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:1;",
+            "display:flex;align-items:center;flex-wrap:wrap;gap:8px;",
         );
 
         for (name, level) in [
@@ -342,6 +421,14 @@ mod platform {
         });
         add_listener(&all_button, "click", all_listener);
 
+        let level_controls = document.create_element("div").ok()?;
+        set_style(
+            &level_controls,
+            "display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:0 1 auto;min-width:0;",
+        );
+        let _ = level_controls.append_child(&filters);
+        let _ = level_controls.append_child(&all_button);
+
         let auto_label = document.create_element("label").ok()?;
         set_style(
             &auto_label,
@@ -377,6 +464,8 @@ mod platform {
         let status = document.create_element("div").ok()?;
         status.set_id(STATUS_ID);
         set_style(&status, "color:#909098;font-size:11px;");
+        let copy_link_listener = Closure::<dyn FnMut(Event)>::new(handle_copy_link);
+        add_listener(&status, "click", copy_link_listener);
 
         let list = document.create_element("div").ok()?;
         list.set_id(ENTRIES_ID);
@@ -387,6 +476,10 @@ mod platform {
             &list,
             "flex:1;min-height:0;overflow:auto;border-top:1px solid #ffffff24;padding-top:8px;",
         );
+        let click_listener = Closure::<dyn FnMut(Event)>::new(handle_log_row_click);
+        add_listener(&list, "click", click_listener);
+        let keyboard_listener = Closure::<dyn FnMut(Event)>::new(handle_log_row_keydown);
+        add_listener(&list, "keydown", keyboard_listener);
 
         let reopen_button = make_button(document, "Logs")?;
         reopen_button.set_id(REOPEN_ID);
@@ -395,14 +488,16 @@ mod platform {
         let reopen_listener = Closure::<dyn FnMut(Event)>::new(|_| set_minimized(false));
         add_listener(&reopen_button, "click", reopen_listener);
 
-        let _ = toolbar.append_child(&filters);
-        let _ = toolbar.append_child(&all_button);
+        let _ = toolbar.append_child(&level_controls);
+        let _ = toolbar.append_child(&search);
         let _ = toolbar.append_child(&auto_label);
         let _ = toolbar.append_child(&clear_button);
         let _ = panel.append_child(&header);
         let _ = panel.append_child(&toolbar);
         let _ = panel.append_child(&status);
         let _ = panel.append_child(&list);
+        let copy_listener = Closure::<dyn FnMut(Event)>::new(handle_copy);
+        add_listener(&panel, "copy", copy_listener);
         let body = document.body()?;
         let _ = body.append_child(&panel).ok()?;
         let _ = body.append_child(&reopen_button).ok()?;
@@ -446,12 +541,19 @@ mod platform {
         Some(button)
     }
 
-    fn make_log_row(document: &Document, entry: &LogEntry) -> Option<Element> {
+    fn make_log_row(
+        document: &Document,
+        id: u64,
+        entry: &LogEntry,
+        selected: bool,
+    ) -> Option<Element> {
         let row = document.create_element("div").ok()?;
-        set_style(
-            &row,
-            "display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;padding:3px 0;border-bottom:1px solid #ffffff12;",
-        );
+        row.set_id(&format!("examplify-console-entry-{id}"));
+        let _ = row.set_attribute("data-examplify-log-id", &id.to_string());
+        set_style(&row, &log_row_style(selected));
+        let _ = row.set_attribute("role", "button");
+        let _ = row.set_attribute("aria-pressed", if selected { "true" } else { "false" });
+        let _ = row.set_attribute("tabindex", "0");
 
         let timestamp = document.create_element("span").ok()?;
         timestamp.set_text_content(Some(&format_timestamp(entry.timestamp)));
@@ -483,6 +585,282 @@ mod platform {
         let _ = row.append_child(&target);
         let _ = row.append_child(&message);
         Some(row)
+    }
+
+    fn handle_log_row_click(event: Event) {
+        let Some(row) = find_log_row(&event) else {
+            return;
+        };
+        let Some(id) = row
+            .get_attribute("data-examplify-log-id")
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let (visible_ids, shift, toggle) = {
+            let options = lock_options();
+            let (shift, toggle) = event
+                .dyn_ref::<MouseEvent>()
+                .map(|event| (event.shift_key(), event.ctrl_key() || event.meta_key()))
+                .unwrap_or_default();
+            (options.visible_ids.clone(), shift, toggle)
+        };
+        apply_selection(id, shift, toggle, &visible_ids);
+    }
+
+    fn handle_log_row_keydown(event: Event) {
+        let Some(keyboard_event) = event.dyn_ref::<KeyboardEvent>() else {
+            return;
+        };
+        if (keyboard_event.ctrl_key() || keyboard_event.meta_key())
+            && keyboard_event.key().eq_ignore_ascii_case("a")
+        {
+            event.prevent_default();
+            select_all_visible();
+            return;
+        }
+        if keyboard_event.key() != "Enter" && keyboard_event.key() != " " {
+            return;
+        }
+        let Some(row) = find_log_row(&event) else {
+            return;
+        };
+        let Some(id) = row
+            .get_attribute("data-examplify-log-id")
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            return;
+        };
+        event.prevent_default();
+        let visible_ids = lock_options().visible_ids.clone();
+        apply_selection(id, false, false, &visible_ids);
+    }
+
+    fn find_log_row(event: &Event) -> Option<Element> {
+        let mut element = event.target()?.dyn_into::<Element>().ok()?;
+        loop {
+            if element.has_attribute("data-examplify-log-id") {
+                return Some(element);
+            }
+            element = element.parent_element()?;
+        }
+    }
+
+    fn apply_selection(id: u64, shift: bool, toggle: bool, visible_ids: &[u64]) {
+        let (selected_ids, selected_count) = {
+            let mut options = lock_options();
+            let clicked_index = visible_ids.iter().position(|visible_id| *visible_id == id);
+            let anchor_index = options.selection_anchor.and_then(|anchor| {
+                visible_ids
+                    .iter()
+                    .position(|visible_id| *visible_id == anchor)
+            });
+
+            if shift {
+                if let Some(clicked_index) = clicked_index {
+                    let anchor_index = anchor_index.unwrap_or_else(|| {
+                        options.selection_anchor = Some(id);
+                        clicked_index
+                    });
+                    if !toggle {
+                        options.selected_ids.clear();
+                    }
+                    for range_index in
+                        anchor_index.min(clicked_index)..=anchor_index.max(clicked_index)
+                    {
+                        options.selected_ids.insert(visible_ids[range_index]);
+                    }
+                }
+            } else if toggle {
+                if !options.selected_ids.remove(&id) {
+                    options.selected_ids.insert(id);
+                }
+                options.selection_anchor = Some(id);
+            } else {
+                options.selected_ids.clear();
+                options.selected_ids.insert(id);
+                options.selection_anchor = Some(id);
+            }
+            (options.selected_ids.clone(), options.selected_ids.len())
+        };
+
+        update_selection_display(visible_ids, &selected_ids, selected_count);
+    }
+
+    fn select_all_visible() {
+        let (visible_ids, selected_ids, selected_count) = {
+            let mut options = lock_options();
+            let visible_ids = options.visible_ids.clone();
+            options.selected_ids = visible_ids.iter().copied().collect();
+            options.selection_anchor = visible_ids.first().copied();
+            (
+                visible_ids,
+                options.selected_ids.clone(),
+                options.selected_ids.len(),
+            )
+        };
+        update_selection_display(&visible_ids, &selected_ids, selected_count);
+    }
+
+    fn update_selection_display(
+        visible_ids: &[u64],
+        selected_ids: &HashSet<u64>,
+        selected_count: usize,
+    ) {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            for visible_id in visible_ids {
+                if let Some(row) =
+                    document.get_element_by_id(&format!("examplify-console-entry-{visible_id}"))
+                {
+                    let selected = selected_ids.contains(visible_id);
+                    let _ =
+                        row.set_attribute("aria-pressed", if selected { "true" } else { "false" });
+                    set_style(&row, &log_row_style(selected));
+                }
+            }
+            update_status(
+                &document,
+                visible_ids.len(),
+                captured_entries().len(),
+                selected_count,
+            );
+        }
+    }
+
+    fn log_row_style(selected: bool) -> String {
+        let mut style = String::from(
+            "display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;padding:3px 0;border-bottom:1px solid #ffffff12;cursor:pointer;",
+        );
+        if selected {
+            style.push_str("background:#1d4ed866;");
+        }
+        style
+    }
+
+    fn handle_copy(event: Event) {
+        if event
+            .target()
+            .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+            .is_some_and(|input| input.type_() != "checkbox")
+        {
+            return;
+        }
+
+        let Some(clipboard) = event
+            .dyn_ref::<ClipboardEvent>()
+            .and_then(ClipboardEvent::clipboard_data)
+        else {
+            return;
+        };
+        let Some(copied) = selected_log_text() else {
+            return;
+        };
+
+        if clipboard.set_data("text/plain", &copied).is_ok() {
+            event.prevent_default();
+        }
+    }
+
+    fn handle_copy_link(event: Event) {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if !target.has_attribute("data-copy-selected") {
+            return;
+        }
+        event.prevent_default();
+
+        let Some(text) = selected_log_text() else {
+            return;
+        };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let clipboard = js_sys::Reflect::get(
+            window.navigator().as_ref(),
+            &wasm_bindgen::JsValue::from_str("clipboard"),
+        )
+        .ok()
+        .and_then(|clipboard| clipboard.dyn_into::<Clipboard>().ok());
+
+        if let Some(clipboard) = clipboard {
+            let promise = clipboard.write_text(&text);
+            wasm_bindgen_futures::spawn_local(async move {
+                if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
+                    log::warn!("Could not copy selected log messages to the clipboard");
+                }
+            });
+        } else {
+            log::warn!("Could not copy selected log messages to the clipboard");
+        }
+    }
+
+    fn selected_log_text() -> Option<String> {
+        let selected_ids = lock_options().selected_ids.clone();
+        if selected_ids.is_empty() {
+            return None;
+        }
+
+        let text = captured_entries()
+            .into_iter()
+            .filter(|(id, _)| selected_ids.contains(id))
+            .map(|(_, entry)| {
+                format!(
+                    "{} {:>5} {} {}",
+                    format_timestamp(entry.timestamp),
+                    entry.level,
+                    entry.target,
+                    entry.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn update_status(document: &Document, shown: usize, total: usize, selected: usize) {
+        if let Some(status) = document.get_element_by_id(STATUS_ID) {
+            if selected == 0 {
+                status.set_text_content(Some(&format!("{shown} shown, {total} total")));
+            } else {
+                status.set_text_content(Some(&format!(
+                    "{shown} shown, {total} total, {selected} selected | "
+                )));
+                if let Ok(link) = document.create_element("a") {
+                    let _ = link.set_attribute("href", "#");
+                    let _ = link.set_attribute("data-copy-selected", "true");
+                    let _ = link.set_attribute("aria-label", "Copy selected log messages");
+                    link.set_text_content(Some("Copy selected"));
+                    set_style(
+                        &link,
+                        "color:#8ab4f8;text-decoration:underline;cursor:pointer;",
+                    );
+                    let _ = status.append_child(&link);
+                }
+            }
+        }
+    }
+
+    fn matches_search(entry: &LogEntry, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+
+        let query = query.to_lowercase();
+        [
+            entry.level.to_string(),
+            entry.target.clone(),
+            entry.message.clone(),
+            entry.module_path.clone().unwrap_or_default(),
+            entry.file.clone().unwrap_or_default(),
+            entry.line.map(|line| line.to_string()).unwrap_or_default(),
+        ]
+        .iter()
+        .any(|field| field.to_lowercase().contains(&query))
     }
 
     fn add_filter_listener(input: &Element, level: Level) {
@@ -651,14 +1029,22 @@ mod tests {
             buffer.entries.back().unwrap().message,
             MAX_LOG_ENTRIES.to_string()
         );
+        assert_eq!(buffer.ids.len(), MAX_LOG_ENTRIES);
+        assert_eq!(buffer.ids.front(), Some(&1));
+        assert_eq!(buffer.ids.back(), Some(&(MAX_LOG_ENTRIES as u64)));
     }
 
     #[test]
     fn clearing_the_buffer_removes_all_records() {
         let mut buffer = LogBuffer::default();
         buffer.push(entry("hello"));
-        buffer.entries.clear();
+        let previous_id = buffer.ids.front().copied();
+        buffer.clear();
 
         assert!(buffer.entries.is_empty());
+        assert!(buffer.ids.is_empty());
+
+        buffer.push(entry("after clear"));
+        assert_ne!(buffer.ids.front().copied(), previous_id);
     }
 }
