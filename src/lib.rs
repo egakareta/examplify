@@ -4,7 +4,7 @@ use std::{
     time::SystemTime,
 };
 
-use log::Level;
+pub use log;
 
 /// Maximum number of recent log records retained in memory.
 pub const MAX_LOG_ENTRIES: usize = 1_000;
@@ -15,7 +15,7 @@ pub struct LogEntry {
     /// Time when the record was captured.
     pub timestamp: SystemTime,
     /// Severity of the record.
-    pub level: Level,
+    pub level: log::Level,
     /// Log target, usually the Rust module path.
     pub target: String,
     /// Formatted log message.
@@ -1007,7 +1007,7 @@ mod tests {
     fn entry(message: impl Into<String>) -> LogEntry {
         LogEntry {
             timestamp: UNIX_EPOCH,
-            level: Level::Info,
+            level: log::Level::Info,
             target: "test".to_owned(),
             message: message.into(),
             module_path: None,
