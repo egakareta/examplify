@@ -31,12 +31,10 @@ pub fn start_loop() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn start_loop() {
-    std::thread::spawn(|| {
-        loop {
-            log_messages();
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-    });
+    loop {
+        log_messages();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 fn main() {

@@ -30,20 +30,22 @@ pub struct LogEntry {
 
 static LOG_BUFFER: OnceLock<Mutex<LogBuffer>> = OnceLock::new();
 
-/// Install Examplify's DOM console as the process-wide logger on WebAssembly.
+/// Install Examplify's logger for the current platform.
 ///
-/// On native targets this is a no-op. The browser console includes per-level
-/// visibility filters, auto-scroll, and a clear button.
+/// On native targets, records are forwarded to `env_logger`. On WebAssembly,
+/// records are shown in both the browser's developer console and Examplify's
+/// DOM console.
 pub fn init() {
     let _ = try_init();
 }
 
 /// Fallible version of [`init`], useful when another global logger may already
-/// be installed. On native targets it succeeds without installing a logger.
+/// be installed.
 pub fn try_init() -> Result<(), log::SetLoggerError> {
+    platform::install()?;
+
     #[cfg(target_arch = "wasm32")]
     {
-        platform::install()?;
         platform::refresh();
     }
 
@@ -136,6 +138,7 @@ mod platform {
                 file: record.file().map(str::to_owned),
                 line: record.line(),
             };
+            console_log::log(record);
             lock_buffer().push(entry);
             refresh();
         }
@@ -574,6 +577,47 @@ mod platform {
         UNIX_EPOCH
             .checked_add(Duration::from_millis(millis as u64))
             .unwrap_or(UNIX_EPOCH)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod platform {
+    use std::sync::OnceLock;
+
+    use log::{Log, Metadata, Record};
+
+    static LOGGER: ExamplifyLogger = ExamplifyLogger;
+    static BACKEND: OnceLock<env_logger::Logger> = OnceLock::new();
+
+    struct ExamplifyLogger;
+
+    pub(super) fn install() -> Result<(), log::SetLoggerError> {
+        let backend = BACKEND.get_or_init(|| env_logger::Builder::from_default_env().build());
+        let max_level = backend.filter();
+
+        log::set_logger(&LOGGER)?;
+        log::set_max_level(max_level);
+        Ok(())
+    }
+
+    impl Log for ExamplifyLogger {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            BACKEND
+                .get()
+                .is_some_and(|backend| backend.enabled(metadata))
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            if let Some(backend) = BACKEND.get() {
+                backend.log(record);
+            }
+        }
+
+        fn flush(&self) {
+            if let Some(backend) = BACKEND.get() {
+                backend.flush();
+            }
+        }
     }
 }
 
