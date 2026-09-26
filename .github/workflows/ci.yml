@@ -19,6 +19,8 @@ jobs:
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - run: mise check
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --target wasm32-unknown-unknown --all-targets --all-features --locked
   test:
     runs-on: ubuntu-latest
     steps:

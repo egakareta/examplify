@@ -2,8 +2,16 @@
 name = "examplify"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A lightweight logging UI for Rust web applications"
 license = "MIT"
+repository = "https://github.com/egakareta/examplify"
+homepage = "https://github.com/egakareta/examplify"
+documentation = "https://docs.rs/examplify"
+readme = "README.md"
+keywords = ["logging", "wasm", "console", "debugging", "log"]
+categories = ["development-tools::debugging", "wasm", "web-programming"]
+include = ["README.md", "LICENSE", "src/**", "examples/*.rs", "examples/index.html", "Trunk.toml"]
 
 [dependencies]
 log = "0.4"

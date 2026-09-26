@@ -33,4 +33,4 @@ if let Err(error) = examplify::try_init() {
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](https://github.com/egakareta/examplify/blob/master/LICENSE).
