@@ -38,8 +38,29 @@ static LOG_BUFFER: OnceLock<Mutex<LogBuffer>> = OnceLock::new();
 /// On native targets, records are forwarded to `env_logger`. On WebAssembly,
 /// records are shown in both the browser's developer console and Examplify's
 /// DOM console.
-pub fn init() {
+pub fn init() -> Init {
     let _ = try_init();
+    Init
+}
+
+/// Handle for configuring the logger after calling [`init`].
+pub struct Init;
+
+impl Init {
+    /// Set the maximum log level forwarded on native targets, or the default
+    /// level filter shown in the WebAssembly console.
+    ///
+    /// On WebAssembly, all records are still captured and sent to the browser
+    /// developer console; this only changes which levels are initially shown
+    /// in Examplify's DOM console.
+    pub fn with_log_level(self, _level: log::LevelFilter) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        platform::set_log_level(_level);
+        #[cfg(target_arch = "wasm32")]
+        platform::set_default_log_level(_level);
+
+        self
+    }
 }
 
 /// Fallible version of [`init`], useful when another global logger may already
@@ -142,6 +163,22 @@ mod platform {
     static LOGGER: ExamplifyLogger = ExamplifyLogger;
 
     static OPTIONS: OnceLock<Mutex<ConsoleOptions>> = OnceLock::new();
+
+    pub(super) fn set_default_log_level(level: LevelFilter) {
+        {
+            let mut options = lock_options();
+            for console_level in [
+                Level::Trace,
+                Level::Debug,
+                Level::Info,
+                Level::Warn,
+                Level::Error,
+            ] {
+                options.set_level(console_level, console_level.to_level_filter() <= level);
+            }
+        }
+        refresh();
+    }
 
     struct ExamplifyLogger;
 
@@ -963,34 +1000,52 @@ mod platform {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
-    use std::sync::OnceLock;
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    };
 
-    use log::{Log, Metadata, Record};
+    use log::{LevelFilter, Log, Metadata, Record};
 
     static LOGGER: ExamplifyLogger = ExamplifyLogger;
     static BACKEND: OnceLock<env_logger::Logger> = OnceLock::new();
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    static LOG_LEVEL: AtomicU8 = AtomicU8::new(level_filter_to_u8(LevelFilter::Debug));
 
     struct ExamplifyLogger;
 
     pub(super) fn install() -> Result<(), log::SetLoggerError> {
-        let backend = BACKEND.get_or_init(|| env_logger::Builder::from_default_env().build());
-        let max_level = backend.filter();
+        BACKEND.get_or_init(|| {
+            env_logger::Builder::new()
+                .filter_level(LevelFilter::Trace)
+                .build()
+        });
 
         log::set_logger(&LOGGER)?;
-        log::set_max_level(max_level);
+        INSTALLED.store(true, Ordering::Release);
+        log::set_max_level(current_log_level());
         Ok(())
+    }
+
+    pub(super) fn set_log_level(level: LevelFilter) {
+        if !INSTALLED.load(Ordering::Acquire) {
+            return;
+        }
+
+        LOG_LEVEL.store(level_filter_to_u8(level), Ordering::Relaxed);
+        log::set_max_level(level);
     }
 
     impl Log for ExamplifyLogger {
         fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-            BACKEND
-                .get()
-                .is_some_and(|backend| backend.enabled(metadata))
+            BACKEND.get().is_some() && metadata.level() <= current_log_level()
         }
 
         fn log(&self, record: &Record<'_>) {
-            if let Some(backend) = BACKEND.get() {
-                backend.log(record);
+            if self.enabled(record.metadata()) {
+                if let Some(backend) = BACKEND.get() {
+                    backend.log(record);
+                }
             }
         }
 
@@ -998,6 +1053,32 @@ mod platform {
             if let Some(backend) = BACKEND.get() {
                 backend.flush();
             }
+        }
+    }
+
+    fn current_log_level() -> LevelFilter {
+        level_filter_from_u8(LOG_LEVEL.load(Ordering::Relaxed))
+    }
+
+    const fn level_filter_to_u8(level: LevelFilter) -> u8 {
+        match level {
+            LevelFilter::Off => 0,
+            LevelFilter::Error => 1,
+            LevelFilter::Warn => 2,
+            LevelFilter::Info => 3,
+            LevelFilter::Debug => 4,
+            LevelFilter::Trace => 5,
+        }
+    }
+
+    const fn level_filter_from_u8(level: u8) -> LevelFilter {
+        match level {
+            0 => LevelFilter::Off,
+            1 => LevelFilter::Error,
+            2 => LevelFilter::Warn,
+            3 => LevelFilter::Info,
+            4 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
         }
     }
 }

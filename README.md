@@ -15,7 +15,7 @@ much heavier crate like `eframe`.
 use examplify::log;
 
 fn main() {
-    examplify::init();
+    examplify::init().with_log_level(log::LevelFilter::Info);
     log::info!("Application started");
     log::warn!("Something needs attention");
 }

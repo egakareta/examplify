@@ -3,6 +3,6 @@
 //! - web `trunk serve --example simple`
 
 fn main() {
-    examplify::init();
-    log::error!("Application started");
+    examplify::init().with_log_level(examplify::log::LevelFilter::Info);
+    log::info!("Application started");
 }
