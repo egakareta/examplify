@@ -1,3 +1,6 @@
+#![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
+
 use std::{
     collections::VecDeque,
     sync::{Mutex, MutexGuard, OnceLock},
