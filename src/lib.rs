@@ -274,70 +274,72 @@ impl Console {
 
     /// Render the console inside an existing UI.
     pub fn show(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.toggle_value(&mut self.show_trace, level_text("TRACE", Level::Trace));
-            ui.toggle_value(&mut self.show_debug, level_text("DEBUG", Level::Debug));
-            ui.toggle_value(&mut self.show_info, level_text("INFO", Level::Info));
-            ui.toggle_value(&mut self.show_warn, level_text("WARN", Level::Warn));
-            ui.toggle_value(&mut self.show_error, level_text("ERROR", Level::Error));
-            if ui.button("All levels").clicked() {
-                self.show_trace = true;
-                self.show_debug = true;
-                self.show_info = true;
-                self.show_warn = true;
-                self.show_error = true;
-            }
-            ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
-            if ui.button("Clear").clicked() {
-                clear();
-            }
-        });
-
-        let snapshot = entries();
-        let visible: Vec<_> = snapshot
-            .iter()
-            .filter(|entry| self.includes(entry.level))
-            .collect();
-
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{} shown, {} total", visible.len(), snapshot.len()))
-                    .small()
-                    .weak(),
-            );
-        });
-
-        ui.separator();
-
-        ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .stick_to_bottom(self.auto_scroll)
-            .max_height(ui.available_height().max(120.0))
-            .show(ui, |ui| {
-                if visible.is_empty() {
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("No matching log messages yet.").weak());
+        egui::Frame::NONE.inner_margin(12).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.toggle_value(&mut self.show_trace, level_text("TRACE", Level::Trace));
+                ui.toggle_value(&mut self.show_debug, level_text("DEBUG", Level::Debug));
+                ui.toggle_value(&mut self.show_info, level_text("INFO", Level::Info));
+                ui.toggle_value(&mut self.show_warn, level_text("WARN", Level::Warn));
+                ui.toggle_value(&mut self.show_error, level_text("ERROR", Level::Error));
+                if ui.button("All levels").clicked() {
+                    self.show_trace = true;
+                    self.show_debug = true;
+                    self.show_info = true;
+                    self.show_warn = true;
+                    self.show_error = true;
                 }
-
-                for entry in visible {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format_timestamp(entry.timestamp))
-                                .monospace()
-                                .small()
-                                .weak(),
-                        );
-                        ui.label(
-                            RichText::new(format!("{:>5}", entry.level))
-                                .monospace()
-                                .strong()
-                                .color(level_color(entry.level)),
-                        );
-                        ui.label(RichText::new(&entry.target).monospace().small().weak());
-                        ui.label(RichText::new(&entry.message).monospace());
-                    });
+                ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
+                if ui.button("Clear").clicked() {
+                    clear();
                 }
             });
+
+            let snapshot = entries();
+            let visible: Vec<_> = snapshot
+                .iter()
+                .filter(|entry| self.includes(entry.level))
+                .collect();
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{} shown, {} total", visible.len(), snapshot.len()))
+                        .small()
+                        .weak(),
+                );
+            });
+
+            ui.separator();
+
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .stick_to_bottom(self.auto_scroll)
+                .max_height(ui.available_height().max(120.0))
+                .show(ui, |ui| {
+                    if visible.is_empty() {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new("No matching log messages yet.").weak());
+                    }
+
+                    for entry in visible {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(format_timestamp(entry.timestamp))
+                                    .monospace()
+                                    .small()
+                                    .weak(),
+                            );
+                            ui.label(
+                                RichText::new(format!("{:>5}", entry.level))
+                                    .monospace()
+                                    .strong()
+                                    .color(level_color(entry.level)),
+                            );
+                            ui.label(RichText::new(&entry.target).monospace().small().weak());
+                            ui.label(RichText::new(&entry.message).monospace());
+                        });
+                    }
+                });
+        });
     }
 
     fn includes(&self, level: Level) -> bool {
