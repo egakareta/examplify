@@ -1,4 +1,16 @@
-# Examplify
+<div align="center">
+
+  <h1>👾 Examplify</h1>
+
+  <p>
+    <a href="https://github.com/egakareta/examplify/actions/workflows/ci.yml"><img alt="Build Status" src="https://github.com/egakareta/examplify/actions/workflows/ci.yml/badge.svg?branch=master"/></a>
+    <a href="https://crates.io/crates/examplify"><img alt="crates.io" src="https://img.shields.io/crates/v/examplify"/></a>
+  </p>
+
+  <img width="500" alt="showcase" src="assets/showcase.png">
+</div>
+
+## About
 
 Examplify is a lightweight logging UI for Rust web applications. It uses the
 [`log`](https://crates.io/crates/log) facade and adds a searchable, filterable
