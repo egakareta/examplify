@@ -41,3 +41,7 @@ web-sys = { version = "0.3", features = [
   "Node",
   "Window",
 ] }
+
+[dev-dependencies]
+fastrand = { version = "2", features = ["js"] }
+game-loop = "1"
