@@ -37,7 +37,8 @@ static LOG_BUFFER: OnceLock<Mutex<LogBuffer>> = OnceLock::new();
 ///
 /// On native targets, records are forwarded to `env_logger`. On WebAssembly,
 /// records are shown in both the browser's developer console and Examplify's
-/// DOM console.
+/// DOM console. WebAssembly panics are also captured as error-level records,
+/// including the browser's JavaScript stack trace when available.
 pub fn init() -> Init {
     let _ = try_init();
     Init
@@ -185,7 +186,41 @@ mod platform {
     pub(super) fn install() -> Result<(), log::SetLoggerError> {
         log::set_logger(&LOGGER)?;
         log::set_max_level(LevelFilter::Trace);
+        std::panic::set_hook(Box::new(|info| {
+            let panic_message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+
+            let mut message = if let Some(location) = info.location() {
+                format!(
+                    "panicked at {}:{}:{}: {}",
+                    location.file(),
+                    location.line(),
+                    location.column(),
+                    panic_message
+                )
+            } else {
+                format!("panicked: {panic_message}")
+            };
+
+            if let Some(stack) = browser_stack_trace() {
+                message.push_str("\n\nStack: ");
+                message.push_str(&stack);
+            }
+
+            log::error!(target: "panic", "{message}");
+        }));
         Ok(())
+    }
+
+    fn browser_stack_trace() -> Option<String> {
+        let error = js_sys::Error::new("");
+        js_sys::Reflect::get(error.as_ref(), &wasm_bindgen::JsValue::from_str("stack"))
+            .ok()?
+            .as_string()
     }
 
     impl Log for ExamplifyLogger {
