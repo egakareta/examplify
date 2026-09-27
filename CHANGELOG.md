@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0] - 2026-09-27
+
+### Added
+
+- Capture WebAssembly panics as error-level log entries, including the source
+  location and browser JavaScript stack trace when available.
+- Add `panic` and `civilization` examples demonstrating panic reporting and
+  logging in a resource-management simulation.
+
+### Changed
+
+- Refresh the README with a centered project heading, build and crates.io
+  badges, and a console showcase image.
+
 ## [0.2.0] - 2026-09-27
 
 ### Added
