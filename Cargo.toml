@@ -16,10 +16,10 @@ include = ["README.md", "LICENSE", "src/**", "examples/*.rs", "examples/index.ht
 [dependencies]
 log = "0.4"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))'.dependencies]
 env_logger = "0.11"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_family = "wasm", not(target_os = "wasi")))'.dependencies]
 console_log = "1"
 js-sys = { version = "0.3", default-features = false }
 wasm-bindgen = "0.2"

@@ -35,10 +35,11 @@ static LOG_BUFFER: OnceLock<Mutex<LogBuffer>> = OnceLock::new();
 
 /// Install Examplify's logger for the current platform.
 ///
-/// On native targets, records are forwarded to `env_logger`. On WebAssembly,
-/// records are shown in both the browser's developer console and Examplify's
-/// DOM console. WebAssembly panics are also captured as error-level records,
-/// including the browser's JavaScript stack trace when available.
+/// On non-browser targets, records are forwarded to `env_logger`. In browser
+/// WebAssembly, records are shown in both the browser's developer console and
+/// Examplify's DOM console. Browser WebAssembly panics are also captured as
+/// error-level records, including the browser's JavaScript stack trace when
+/// available.
 pub fn init() -> Init {
     let _ = try_init();
     Init
@@ -48,16 +49,16 @@ pub fn init() -> Init {
 pub struct Init;
 
 impl Init {
-    /// Set the maximum log level forwarded on native targets, or the default
-    /// level filter shown in the WebAssembly console.
+    /// Set the maximum log level forwarded on non-browser targets, or the
+    /// default level filter shown in the browser WebAssembly console.
     ///
-    /// On WebAssembly, all records are still captured and sent to the browser
-    /// developer console; this only changes which levels are initially shown
-    /// in Examplify's DOM console.
+    /// In browser WebAssembly, all records are still captured and sent to the
+    /// browser developer console; this only changes which levels are initially
+    /// shown in Examplify's DOM console.
     pub fn with_log_level(self, _level: log::LevelFilter) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
         platform::set_log_level(_level);
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
         platform::set_default_log_level(_level);
 
         self
@@ -69,7 +70,7 @@ impl Init {
 pub fn try_init() -> Result<(), log::SetLoggerError> {
     platform::install()?;
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
     {
         platform::refresh();
     }
@@ -82,7 +83,7 @@ pub fn entries() -> Vec<LogEntry> {
     lock_buffer().entries.iter().cloned().collect()
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 fn captured_entries() -> Vec<(u64, LogEntry)> {
     let buffer = lock_buffer();
     buffer
@@ -93,24 +94,25 @@ fn captured_entries() -> Vec<(u64, LogEntry)> {
         .collect()
 }
 
-/// Remove all currently captured records and clear the browser console.
+/// Remove all currently captured records and clear the browser console when
+/// running in browser WebAssembly.
 pub fn clear() {
     lock_buffer().clear();
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
     platform::refresh();
 }
 
 #[derive(Default)]
 struct LogBuffer {
     entries: VecDeque<LogEntry>,
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(any(all(target_family = "wasm", not(target_os = "wasi")), test))]
     ids: VecDeque<u64>,
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(any(all(target_family = "wasm", not(target_os = "wasi")), test))]
     next_id: u64,
 }
 
 impl LogBuffer {
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(any(all(target_family = "wasm", not(target_os = "wasi")), test))]
     fn push(&mut self, entry: LogEntry) {
         if self.entries.len() == MAX_LOG_ENTRIES {
             self.entries.pop_front();
@@ -123,7 +125,7 @@ impl LogBuffer {
 
     fn clear(&mut self) {
         self.entries.clear();
-        #[cfg(any(target_arch = "wasm32", test))]
+        #[cfg(any(all(target_family = "wasm", not(target_os = "wasi")), test))]
         self.ids.clear();
     }
 }
@@ -135,7 +137,7 @@ fn lock_buffer() -> MutexGuard<'static, LogBuffer> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 mod platform {
     use std::{
         collections::HashSet,
@@ -1033,7 +1035,7 @@ mod platform {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
 mod platform {
     use std::sync::{
         OnceLock,

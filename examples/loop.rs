@@ -1,4 +1,4 @@
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 use wasm_bindgen::prelude::*;
 
 fn log_messages() {
@@ -8,7 +8,7 @@ fn log_messages() {
     log::debug!("This is a debug message.");
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 #[wasm_bindgen]
 pub fn start_loop() {
     use wasm_bindgen::JsCast;
@@ -29,7 +29,7 @@ pub fn start_loop() {
     closure.forget();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
 fn start_loop() {
     loop {
         log_messages();
