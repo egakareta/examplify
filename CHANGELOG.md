@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] - 2026-10-22
+
+### Fixed
+
+- Restrict browser logging setup and WebAssembly dependencies to non-WASI
+  targets, allowing WASI builds to use the non-browser logger and wasm64 to
+  use the browser logger.
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
