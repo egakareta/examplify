@@ -4,20 +4,21 @@ version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A lightweight logging UI for Rust web applications"
-license = "MIT"
-repository = "https://github.com/egakareta/examplify"
-homepage = "https://github.com/egakareta/examplify"
 documentation = "https://docs.rs/examplify"
 readme = "README.md"
-keywords = ["logging", "wasm", "console", "debugging", "log"]
+homepage = "https://github.com/egakareta/examplify"
+repository = "https://github.com/egakareta/examplify"
+license = "MIT OR Apache-2.0"
+keywords = ["console", "debugging", "log", "logging", "wasm"]
 categories = ["development-tools::debugging", "wasm", "web-programming"]
-include = ["README.md", "LICENSE", "src/**", "examples/*.rs", "examples/index.html", "Trunk.toml"]
+include = ["LICENSE", "README.md", "Trunk.toml", "examples/*.rs", "examples/index.html", "src/**"]
 
 [dependencies]
 log = "0.4"
 
-[target.'cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))'.dependencies]
-env_logger = "0.11"
+[dev-dependencies]
+fastrand = { version = "2", features = ["js"] }
+game-loop = "1"
 
 [target.'cfg(all(target_family = "wasm", not(target_os = "wasi")))'.dependencies]
 console_log = "1"
@@ -42,6 +43,5 @@ web-sys = { version = "0.3", features = [
   "Window",
 ] }
 
-[dev-dependencies]
-fastrand = { version = "2", features = ["js"] }
-game-loop = "1"
+[target.'cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))'.dependencies]
+env_logger = "0.11"
